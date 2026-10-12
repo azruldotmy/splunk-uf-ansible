@@ -1,0 +1,13 @@
+---
+# Splunk Universal Forwarder package and configuration.
+splunk_version: "10.6.0.5"
+splunk_package: "splunkforwarder-10.6.0.5-86587d4e3b27-linux-amd64.tgz"
+splunk_download_url: "https://download.splunk.com/products/universalforwarder/releases/10.6.0.5/linux/splunkforwarder-10.6.0.5-86587d4e3b27-linux-amd64.tgz"
+splunk_home: "/opt/splunkforwarder"
+splunk_download_path: "/var/tmp/{{ splunk_package }}"
+
+splunk_deployment_server: "172.16.1.200:8089"
+splunk_admin_user: "splunk"
+splunk_service_user: "splunk"
+splunk_service_group: "splunk"
+splunk_phone_home_interval: 60

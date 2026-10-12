@@ -1,0 +1,193 @@
+---
+- name: Validate the target platform and required secrets
+  ansible.builtin.assert:
+    that:
+      - ansible_system == "Linux"
+      - ansible_architecture == "x86_64"
+      - ansible_service_mgr == "systemd"
+      - vault_splunk_seed_password is defined
+      - vault_splunk_admin_password is defined
+      - vault_splunk_seed_password | length >= 12
+      - vault_splunk_admin_password | length >= 12
+      - "'CHANGE_ME' not in vault_splunk_seed_password"
+      - "'CHANGE_ME' not in vault_splunk_admin_password"
+    fail_msg: >-
+      This playbook expects x86_64 Linux using systemd and two passwords of at
+      least 12 characters in group_vars/ubuntu/vault.yml. Copy the example file,
+      set the passwords, and encrypt it with Ansible Vault before running.
+
+- name: Check whether the Splunk executable already exists
+  ansible.builtin.stat:
+    path: "{{ splunk_home }}/bin/splunk"
+  register: splunk_bin_before
+
+- name: Read the version of an existing Splunk installation
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_home }}/bin/splunk"
+      - version
+  register: splunk_existing_version
+  changed_when: false
+  when: splunk_bin_before.stat.exists
+
+- name: Refuse to overwrite or silently upgrade a different Splunk version
+  ansible.builtin.assert:
+    that:
+      - splunk_version in splunk_existing_version.stdout
+    fail_msg: >-
+      A Splunk installation already exists at {{ splunk_home }}, but it is not
+      version {{ splunk_version }}. This playbook does not perform in-place
+      upgrades; back up the existing forwarder and handle its upgrade separately.
+  when: splunk_bin_before.stat.exists
+
+- name: Ensure the Splunk service group exists
+  ansible.builtin.group:
+    name: "{{ splunk_service_group }}"
+    system: true
+    state: present
+
+- name: Ensure the least-privileged Splunk service account exists
+  ansible.builtin.user:
+    name: "{{ splunk_service_user }}"
+    group: "{{ splunk_service_group }}"
+    home: "{{ splunk_home }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    state: present
+
+- name: Download the Splunk Universal Forwarder package
+  ansible.builtin.get_url:
+    url: "{{ splunk_download_url }}"
+    dest: "{{ splunk_download_path }}"
+    mode: "0644"
+    force: false
+    timeout: 60
+  when: not splunk_bin_before.stat.exists
+
+- name: Extract Splunk Universal Forwarder into /opt
+  ansible.builtin.unarchive:
+    src: "{{ splunk_download_path }}"
+    dest: /opt
+    remote_src: true
+    owner: "{{ splunk_service_user }}"
+    group: "{{ splunk_service_group }}"
+    creates: "{{ splunk_home }}/bin/splunk"
+  when: not splunk_bin_before.stat.exists
+  register: splunk_extract
+
+- name: Check current ownership of the Splunk installation directory
+  ansible.builtin.stat:
+    path: "{{ splunk_home }}"
+  register: splunk_home_stat
+
+- name: Correct ownership if the existing installation is not owned by splunkfwd
+  ansible.builtin.file:
+    path: "{{ splunk_home }}"
+    state: directory
+    owner: "{{ splunk_service_user }}"
+    group: "{{ splunk_service_group }}"
+    recurse: true
+  when: >-
+    splunk_home_stat.stat.exists and
+    (splunk_home_stat.stat.pw_name != splunk_service_user or
+     splunk_home_stat.stat.gr_name != splunk_service_group)
+
+- name: Check whether Splunk's local account database has been initialized
+  ansible.builtin.stat:
+    path: "{{ splunk_home }}/etc/passwd"
+  register: splunk_passwd_stat
+
+- name: First start and seed the built-in Splunk admin password
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_home }}/bin/splunk"
+      - start
+      - --accept-license
+      - --answer-yes
+      - --no-prompt
+      - --seed-passwd
+      - "{{ vault_splunk_seed_password }}"
+  become_user: "{{ splunk_service_user }}"
+  when: not splunk_passwd_stat.stat.exists
+  no_log: true
+
+- name: List configured Splunk CLI users
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_home }}/bin/splunk"
+      - list
+      - user
+      - -auth
+      - "admin:{{ vault_splunk_seed_password }}"
+  become_user: "{{ splunk_service_user }}"
+  register: splunk_user_list
+  changed_when: false
+  no_log: true
+
+- name: Create the requested Splunk support admin if it does not exist
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_home }}/bin/splunk"
+      - add
+      - user
+      - "{{ splunk_admin_user }}"
+      - -password
+      - "{{ vault_splunk_admin_password }}"
+      - -role
+      - admin
+      - -auth
+      - "admin:{{ vault_splunk_seed_password }}"
+  become_user: "{{ splunk_service_user }}"
+  when: splunk_admin_user not in splunk_user_list.stdout
+  no_log: true
+
+- name: Ensure the local system configuration directory exists
+  ansible.builtin.file:
+    path: "{{ splunk_home }}/etc/system/local"
+    state: directory
+    owner: "{{ splunk_service_user }}"
+    group: "{{ splunk_service_group }}"
+    mode: "0750"
+
+- name: Configure the deployment server
+  ansible.builtin.template:
+    src: deploymentclient.conf.j2
+    dest: "{{ splunk_home }}/etc/system/local/deploymentclient.conf"
+    owner: "{{ splunk_service_user }}"
+    group: "{{ splunk_service_group }}"
+    mode: "0640"
+    backup: true
+  notify: Restart Splunk Universal Forwarder
+
+- name: Check whether a Splunk systemd unit has already been created
+  ansible.builtin.stat:
+    path: /etc/systemd/system/SplunkForwarder.service
+  register: splunk_systemd_unit
+
+- name: Register Splunk as a systemd service under the least-privileged account
+  ansible.builtin.command:
+    argv:
+      - "{{ splunk_home }}/bin/splunk"
+      - enable
+      - boot-start
+      - -systemd-managed
+      - "1"
+      - -user
+      - "{{ splunk_service_user }}"
+      - -group
+      - "{{ splunk_service_group }}"
+  when: not splunk_systemd_unit.stat.exists
+
+- name: Remove the downloaded installer after extraction
+  ansible.builtin.file:
+    path: "{{ splunk_download_path }}"
+    state: absent
+
+- name: Ensure systemd knows about the Splunk unit and the service is enabled
+  ansible.builtin.systemd:
+    name: SplunkForwarder
+    daemon_reload: true
+    enabled: true
+    state: started
+

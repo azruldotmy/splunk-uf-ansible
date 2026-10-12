@@ -1,0 +1,10 @@
+---
+# Copy this file to group_vars/ubuntu/vault.yml, replace both values,
+# then encrypt the copied file with: ansible-vault encrypt group_vars/ubuntu/vault.yml
+# Do not commit the real vault.yml file to source control.
+
+# Password for the built-in Splunk CLI account named "admin".
+vault_splunk_seed_password: "CHANGE_ME_TO_A_UNIQUE_LONG_PASSWORD"
+
+# Password for the additional Splunk admin account created by this playbook.
+vault_splunk_admin_password: "CHANGE_ME_TO_ANOTHER_UNIQUE_LONG_PASSWORD"

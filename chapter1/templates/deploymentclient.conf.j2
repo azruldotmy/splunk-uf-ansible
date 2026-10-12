@@ -1,0 +1,7 @@
+[deployment-client]
+disabled = false
+clientName = {{ inventory_hostname }}
+phoneHomeIntervalInSecs = {{ splunk_phone_home_interval }}
+
+[target-broker:deploymentServer]
+targetUri = {{ splunk_deployment_server }}

@@ -1,0 +1,16 @@
+---
+- name: Install and configure Splunk Universal Forwarder 10.6.0.5
+  hosts: ubuntu
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Install and configure Splunk Universal Forwarder
+      ansible.builtin.import_tasks: chapter1/tasks/main.yml
+
+  handlers:
+    - name: Restart Splunk Universal Forwarder
+      ansible.builtin.systemd:
+        name: SplunkForwarder
+        daemon_reload: true
+        state: restarted
